@@ -266,6 +266,7 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
     fmt: PublicAttr[str]
     end_offset: PublicAttr[int]
     cron_schedule: PublicAttr[str]
+    cron_schedule_end: PublicAttr[Optional[str]]
 
     def __new__(
         cls,
@@ -279,6 +280,7 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
         hour_offset: Optional[int] = None,
         day_offset: Optional[int] = None,
         cron_schedule: Optional[str] = None,
+        cron_schedule_end: Optional[str] = None,
     ):
         check.opt_str_param(timezone, "timezone")
         timezone = timezone or "UTC"
@@ -298,6 +300,12 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
         elif isinstance(end, datetime):
             end_dt = end.replace(tzinfo=get_timezone(timezone))
             end = TimestampWithTimezone(end_dt.timestamp(), timezone)
+
+        if cron_schedule_end is not None:
+            check.invariant(
+                cron_schedule is not None,
+                "If cron_schedule_end argument is provided then cron_schedule must also be provided",
+            )
 
         if cron_schedule is not None:
             check.invariant(
@@ -330,6 +338,7 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
             fmt=fmt,
             end_offset=end_offset,
             cron_schedule=cron_schedule,
+            cron_schedule_end=cron_schedule_end,
         )
 
     @public
@@ -897,6 +906,15 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
 
     def _iterate_time_windows(self, start_timestamp: float) -> Iterable[TimeWindow]:
         """Returns an infinite generator of time windows that start after the given start time."""
+        if self.cron_schedule_end is None:
+            yield from self._iterate_time_windows_with_single_cron(start_timestamp)
+        else:
+            yield from self._iterate_time_windows_with_start_and_end_cron(start_timestamp)
+
+    def _iterate_time_windows_with_single_cron(
+        self, start_timestamp: float
+    ) -> Iterable[TimeWindow]:
+        """Iterate over single cron yielding time ranges between subsequent ticks."""
         iterator = cron_string_iterator(
             start_timestamp=start_timestamp,
             cron_string=self.cron_schedule,
@@ -910,6 +928,34 @@ class TimeWindowPartitionsDefinition(PartitionsDefinition, IHaveNew):
             next_time = next(iterator)
             yield TimeWindow(prev_time, next_time)
             prev_time = next_time
+
+    def _iterate_time_windows_with_start_and_end_cron(
+        self, start_timestamp: float
+    ) -> Iterable[TimeWindow]:
+        """Iterate over a start and end cron yielding time ranges between the start cron tick and end cron tick."""
+        iterator_start = cron_string_iterator(
+            start_timestamp=start_timestamp,
+            cron_string=self.cron_schedule,
+            execution_timezone=self.timezone,
+        )
+        iterator_end = cron_string_iterator(
+            start_timestamp=start_timestamp,
+            cron_string=self.cron_schedule_end,
+            execution_timezone=self.timezone,
+        )
+        tick_start = next(iterator_start)
+        tick_end = next(iterator_end)
+        while tick_start.timestamp() < start_timestamp:
+            tick_start = next(iterator_start)
+
+        while tick_end <= tick_start:
+            tick_end = next(iterator_end)
+
+        while True:
+            yield TimeWindow(tick_start, tick_end)
+            tick_start = next(iterator_start)
+            while tick_end <= tick_start:
+                tick_end = next(iterator_end)
 
     def _reverse_iterate_time_windows(self, end_timestamp: float) -> Iterable[TimeWindow]:
         """Returns an infinite generator of time windows that end before the given end time."""

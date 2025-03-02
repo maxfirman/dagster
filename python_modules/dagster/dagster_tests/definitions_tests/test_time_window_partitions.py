@@ -776,6 +776,25 @@ def test_twice_daily_partitions():
     )
 
 
+def test_weekday_partitions():
+    partitions_def = TimeWindowPartitionsDefinition(
+        start=parse_time_string("2025-03-01"),
+        cron_schedule="0 0 * * 1-5",
+        cron_schedule_end="0 0 * * 2-6",
+        fmt=DATE_FORMAT,
+    )
+
+    partitions = partitions_def.get_partition_keys(datetime.strptime("2025-03-08", DATE_FORMAT))
+
+    assert partitions == [
+        "2025-03-03",
+        "2025-03-04",
+        "2025-03-05",
+        "2025-03-06",
+        "2025-03-07",
+    ]
+
+
 def test_start_not_aligned():
     partitions_def = TimeWindowPartitionsDefinition(
         start=parse_time_string("2021-05-05"),
